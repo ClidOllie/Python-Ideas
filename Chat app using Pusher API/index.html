@@ -6,6 +6,7 @@
 <title>Global Chat 🌐</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
 <style>
   :root {
     --bg:#0f0e17; --surface:#1a1a2e; --surface2:#16213e;
@@ -97,7 +98,7 @@
     <input class="field" id="handle" placeholder="your handle..." maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
     <div class="err" id="handle-err"></div>
     <button class="btn" id="join-btn">Let's go →</button>
-    <p class="card-hint">Python users: run <code>chatworks.py</code> — same room</p>
+    <p class="card-hint">Python users: run <code>fastestchat.py</code> — same room</p>
   </div>
 </div>
 
@@ -126,9 +127,6 @@
 </div>
 
 <script>
-// ── Config ────────────────────────────────────────────────────────────────────
-// Password is NEVER stored here — only its SHA-256 hash.
-// Even if someone reads this code they cannot reverse the hash back to the password.
 const PASSWORD_HASH = '22be099338be394c7100e87181c44d8be5dd72f4e24d9356f418aed88f17131c';
 const PK            = '404d8f54ccb40251ca17';
 const CLUSTER       = 'us2';
@@ -143,19 +141,35 @@ const MAX_HIST      = 200;
 let NAME='', atBot=true, pusher, channel;
 const seen = new Set();
 
-// ── SHA-256 hash using built-in Web Crypto API (no libraries needed) ──────────
-async function sha256(str) {
-  const buf    = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+// ── Instant synchronous hash check — sha256() from js-sha256 CDN library ─────
+function checkPass() {
+  const el  = document.getElementById('pass');
+  const h   = sha256(el.value);   // synchronous, instant, no async needed
+  if (h === PASSWORD_HASH) {
+    sessionStorage.setItem(SESSION_KEY, '1');
+    document.getElementById('s-pass').classList.add('gone');
+    document.getElementById('s-join').classList.remove('gone');
+    document.getElementById('handle').focus();
+  } else {
+    document.getElementById('pass-err').textContent = 'Wrong password — try again';
+    shake(document.getElementById('pass'));
+    el.value = ''; el.focus();
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const esc       = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-const scrollBot = () => { const e=document.getElementById('msgs'); e.scrollTop=e.scrollHeight; };
-const toggleWho = () => document.getElementById('who-panel').classList.toggle('open');
+const esc        = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const scrollBot  = () => { const e=document.getElementById('msgs'); e.scrollTop=e.scrollHeight; };
+const toggleWho  = () => document.getElementById('who-panel').classList.toggle('open');
 const autoResize = el => { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,100)+'px'; };
-const shake = el => { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); setTimeout(()=>el.classList.remove('shake'),400); };
-const setConn = (msg,type) => { const b=document.getElementById('conn-bar'); b.textContent=msg; b.className='conn-bar '+type; };
+const setConn    = (msg,type) => { const b=document.getElementById('conn-bar'); b.textContent=msg; b.className='conn-bar '+type; };
+
+function shake(el) {
+  el.classList.remove('shake');
+  void el.offsetWidth;
+  el.classList.add('shake');
+  setTimeout(() => el.classList.remove('shake'), 400);
+}
 
 // ── JSONBin ───────────────────────────────────────────────────────────────────
 async function binGet() {
@@ -164,7 +178,7 @@ async function binGet() {
   return (await r.json()).record || {};
 }
 async function binPut(rec) {
-  const r = await fetch(BIN_URL, {method:'PUT',headers:BIN_HDR,body:JSON.stringify(rec)});
+  const r = await fetch(BIN_URL, {method:'PUT', headers:BIN_HDR, body:JSON.stringify(rec)});
   if (!r.ok) throw Error(r.status);
 }
 
@@ -177,7 +191,7 @@ function addMessage(raw) {
   const m = raw.match(MSG_RE);
   let time='', uname='?', text=raw;
   if (m) { time=m[1]; uname=m[2]; text=m[3]; }
-  const mine = uname.toLowerCase()===NAME.toLowerCase();
+  const mine = uname.toLowerCase() === NAME.toLowerCase();
   const el = document.createElement('div');
   el.className = `msg ${mine?'me':'them'}`;
   el.innerHTML = `<div class="msg-meta"><span class="uname">${esc(uname)}</span>${time?`<span>${time}</span>`:''}</div><div class="bubble">${esc(text)}</div>`;
@@ -187,7 +201,7 @@ function addMessage(raw) {
 
 function addSys(txt) {
   const el = document.createElement('div');
-  el.className='sys'; el.textContent=txt;
+  el.className = 'sys'; el.textContent = txt;
   document.getElementById('msgs').appendChild(el);
   if (atBot) scrollBot();
 }
@@ -196,11 +210,11 @@ function addSys(txt) {
 async function sendMessage(text) {
   const ts   = new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
   const line = `[${ts}] ${NAME}: ${text}`;
-  addMessage(line); // show instantly
+  addMessage(line);  // show instantly
   try {
     const rec  = await binGet();
     const msgs = rec.messages || [];
-    if (!msgs.includes(line)) { msgs.push(line); rec.messages=msgs.slice(-MAX_HIST); }
+    if (!msgs.includes(line)) { msgs.push(line); rec.messages = msgs.slice(-MAX_HIST); }
     await binPut(rec);
   } catch(e) {
     addSys('⚠ send failed');
@@ -210,32 +224,32 @@ async function sendMessage(text) {
 // ── Start chat ────────────────────────────────────────────────────────────────
 async function startChat() {
   const el = document.getElementById('handle');
-  const n  = el.value.trim().slice(0,20);
+  const n  = el.value.trim().slice(0, 20);
   if (!n) { document.getElementById('handle-err').textContent='Please enter a handle'; shake(el); el.focus(); return; }
   NAME = n;
 
   try { const rec=await binGet(); for (const m of (rec.messages||[])) seen.add(m); } catch(e) {}
 
   document.getElementById('s-join').classList.add('gone');
-  document.getElementById('chat').style.display='flex';
+  document.getElementById('chat').style.display = 'flex';
 
   Pusher.logToConsole = false;
-  pusher  = new Pusher(PK, {cluster:CLUSTER});
+  pusher  = new Pusher(PK, {cluster: CLUSTER});
   channel = pusher.subscribe(CHANNEL);
 
   pusher.connection.bind('connected', () => {
-    setConn('⚡ connected — messages are instant','ok');
-    setTimeout(()=>document.getElementById('conn-bar').className='conn-bar', 3000);
+    setConn('⚡ connected — messages are instant', 'ok');
+    setTimeout(() => document.getElementById('conn-bar').className='conn-bar', 3000);
     document.getElementById('pill-txt').textContent = '1 online';
     document.getElementById('hdr-sub').textContent  = 'private · live';
   });
-  pusher.connection.bind('disconnected', ()=>setConn('⚠ disconnected — reconnecting...','err'));
-  pusher.connection.bind('failed',       ()=>setConn('⚠ connection failed','err'));
+  pusher.connection.bind('disconnected', () => setConn('⚠ disconnected — reconnecting...','err'));
+  pusher.connection.bind('failed',       () => setConn('⚠ connection failed','err'));
 
-  // Instant messages from Python script via Pusher
+  // Instant messages from Python via Pusher WebSocket
   channel.bind('message', data => { if (data?.line) addMessage(data.line); });
 
-  // Slow poll for history sync (catches anything missed)
+  // Slow background sync to catch anything missed
   setInterval(async () => {
     try { const rec=await binGet(); for (const m of (rec.messages||[])) addMessage(m); } catch(e) {}
   }, 8000);
@@ -244,47 +258,34 @@ async function startChat() {
   document.getElementById('inp').focus();
 }
 
-// ── Password (hashed) ─────────────────────────────────────────────────────────
-async function checkPass() {
-  const el  = document.getElementById('pass');
-  const val = el.value;
-  const h   = await sha256(val);
-
-  if (h === PASSWORD_HASH) {
-    sessionStorage.setItem(SESSION_KEY,'1');
-    document.getElementById('s-pass').classList.add('gone');
-    document.getElementById('s-join').classList.remove('gone');
-    document.getElementById('handle').focus();
-  } else {
-    document.getElementById('pass-err').textContent='Wrong password — try again';
-    shake(el); el.value=''; el.focus();
-  }
-}
-
 // ── Init ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
-  if (sessionStorage.getItem(SESSION_KEY)==='1') {
+  if (sessionStorage.getItem(SESSION_KEY) === '1') {
     document.getElementById('s-pass').classList.add('gone');
     document.getElementById('s-join').classList.remove('gone');
   }
+
   document.getElementById('pass-btn').onclick = checkPass;
-  document.getElementById('pass').addEventListener('keydown', e=>{ if(e.key==='Enter') checkPass(); });
+  document.getElementById('pass').addEventListener('keydown', e => { if (e.key==='Enter') checkPass(); });
   document.getElementById('join-btn').onclick = startChat;
-  document.getElementById('handle').addEventListener('keydown', e=>{ if(e.key==='Enter') startChat(); });
+  document.getElementById('handle').addEventListener('keydown', e => { if (e.key==='Enter') startChat(); });
 
   const doSend = async () => {
-    const el=document.getElementById('inp'), t=el.value.trim();
+    const el = document.getElementById('inp'), t = el.value.trim();
     if (!t) return;
-    el.value=''; autoResize(el);
+    el.value = ''; autoResize(el);
     await sendMessage(t);
   };
+
   document.getElementById('send-btn').onclick = doSend;
-  document.getElementById('inp').addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();} });
-  document.getElementById('inp').addEventListener('input', function(){autoResize(this);});
-  document.getElementById('msgs').addEventListener('scroll', ()=>{
-    const e=document.getElementById('msgs');
-    atBot=e.scrollHeight-e.scrollTop-e.clientHeight<60;
-    document.getElementById('scroll-btn').classList.toggle('show',!atBot);
+  document.getElementById('inp').addEventListener('keydown', e => {
+    if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
+  });
+  document.getElementById('inp').addEventListener('input', function() { autoResize(this); });
+  document.getElementById('msgs').addEventListener('scroll', () => {
+    const e = document.getElementById('msgs');
+    atBot = e.scrollHeight - e.scrollTop - e.clientHeight < 60;
+    document.getElementById('scroll-btn').classList.toggle('show', !atBot);
   });
 });
 </script>
