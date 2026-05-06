@@ -4,61 +4,41 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-# ── Pusher Config ─────────────────────────────────────────────────────────────
-PASSWORD  = '123'
-APP_ID    = "2150965"
-KEY       = "404d8f54ccb40251ca17"
-SECRET    = "3957573b1ec6a0b53f80"
-CLUSTER   = "us2"
-CHANNEL   = "global-chat"
-
-# JSONBin is only used for message history + presence (read rarely)
-BIN_ID    = "69f4040aaaba8821975a1456"
-BIN_KEY   = "$2a$10$vKt9uIjp7/5nLq0NPM.oUe6Dtmtqo941CNDojDsijC1DNZ..iBBbG"
-BIN_URL   = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
-BIN_HDR   = {"Content-Type": "application/json", "X-Master-Key": BIN_KEY}
-
-PRESENCE_TTL  = 60
-MAX_HISTORY   = 200
+# ── Config ────────────────────────────────────────────────────────────────────
+# Password is stored as a SHA-256 hash — the real password is never in the code
+PASSWORD_HASH   = "22be099338be394c7100e87181c44d8be5dd72f4e24d9356f418aed88f17131c"
+APP_ID          = "2150965"
+KEY             = "404d8f54ccb40251ca17"
+SECRET          = "3957573b1ec6a0b53f80"
+CLUSTER         = "us2"
+CHANNEL         = "global-chat"
+BIN_ID          = "69f4040aaaba8821975a1456"
+BIN_KEY         = "$2a$10$vKt9uIjp7/5nLq0NPM.oUe6Dtmtqo941CNDojDsijC1DNZ..iBBbG"
+BIN_URL         = f"https://api.jsonbin.io/v3/b/{BIN_ID}"
+BIN_HDR         = {"Content-Type": "application/json", "X-Master-Key": BIN_KEY}
+PRESENCE_TTL    = 60
+POLL_INTERVAL   = 2
+MAX_HISTORY     = 200
 
 console = Console()
 
+# ── Password check ────────────────────────────────────────────────────────────
+
+def check_password(attempt):
+    hashed = hashlib.sha256(attempt.encode()).hexdigest()
+    return hashed == PASSWORD_HASH
+
 # ── Pusher HTTP trigger ───────────────────────────────────────────────────────
-# We use Pusher's REST API to trigger events — no SDK needed, just requests.
 
 def pusher_trigger(event, data):
-    """Send an event to Pusher channel instantly via their HTTP API."""
     body    = json.dumps({"name": event, "channel": CHANNEL, "data": json.dumps(data)}, separators=(',', ':'))
     now_ts  = str(int(time.time()))
-    to_sign = "\n".join(["POST", f"/apps/{APP_ID}/events", f"auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0&body_md5={hashlib.md5(body.encode()).hexdigest()}"])
+    md5     = hashlib.md5(body.encode()).hexdigest()
+    to_sign = "\n".join(["POST", f"/apps/{APP_ID}/events", f"auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0&body_md5={md5}"])
     sig     = hmac.new(SECRET.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
-
-    url = (
-        f"https://api-{CLUSTER}.pusher.com/apps/{APP_ID}/events"
-        f"?auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0"
-        f"&body_md5={hashlib.md5(body.encode()).hexdigest()}"
-        f"&auth_signature={sig}"
-    )
+    url     = (f"https://api-{CLUSTER}.pusher.com/apps/{APP_ID}/events"
+               f"?auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0&body_md5={md5}&auth_signature={sig}")
     r = requests.post(url, data=body, headers={"Content-Type": "application/json"}, timeout=5)
-    r.raise_for_status()
-
-# ── Pusher HTTP subscription (long-poll fallback) ─────────────────────────────
-# True WebSocket needs a library. Instead we poll Pusher's channel info API
-# to get who's online, and poll JSONBin at a slow rate for history.
-# Incoming messages come via Pusher triggers stored in JSONBin.
-# This gives us ~1-2s delivery with no SDK.
-
-POLL_INTERVAL = 2   # fast poll since JSONBin is only for history now
-
-# ── JSONBin helpers ───────────────────────────────────────────────────────────
-
-def bin_get():
-    r = requests.get(f"{BIN_URL}/latest", headers=BIN_HDR, timeout=8)
-    r.raise_for_status()
-    return r.json().get("record", {})
-
-def bin_put(record):
-    r = requests.put(BIN_URL, json=record, headers=BIN_HDR, timeout=8)
     r.raise_for_status()
 
 # ── Time ──────────────────────────────────────────────────────────────────────
@@ -73,6 +53,17 @@ def parse_iso(s):
     except Exception:
         return None
 
+# ── JSONBin ───────────────────────────────────────────────────────────────────
+
+def bin_get():
+    r = requests.get(f"{BIN_URL}/latest", headers=BIN_HDR, timeout=10)
+    r.raise_for_status()
+    return r.json().get("record", {})
+
+def bin_put(record):
+    r = requests.put(BIN_URL, json=record, headers=BIN_HDR, timeout=10)
+    r.raise_for_status()
+
 # ── Formatting ────────────────────────────────────────────────────────────────
 
 MSG_RE = re.compile(r"^\[(\d{2}:\d{2})\]\s+(.+?):\s+(.+)$")
@@ -83,48 +74,40 @@ def fmt(raw):
         return f"[dim]{m.group(1)}[/dim]  [bold cyan]{m.group(2)}:[/bold cyan] {m.group(3)}"
     return f"[dim]{raw}[/dim]"
 
-# ── Presence via Pusher channel info ─────────────────────────────────────────
+# ── Presence ──────────────────────────────────────────────────────────────────
 
-def get_presence():
-    """Ask Pusher who is subscribed to the channel right now."""
-    try:
-        now_ts  = str(int(time.time()))
-        path    = f"/apps/{APP_ID}/channels/{CHANNEL}/users"
-        to_sign = "\n".join(["GET", path, f"auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0"])
-        sig     = hmac.new(SECRET.encode(), to_sign.encode(), hashlib.sha256).hexdigest()
-        url     = (
-            f"https://api-{CLUSTER}.pusher.com{path}"
-            f"?auth_key={KEY}&auth_timestamp={now_ts}&auth_version=1.0&auth_signature={sig}"
-        )
-        r = requests.get(url, timeout=5)
-        if r.ok:
-            return [u["id"] for u in r.json().get("users", [])]
-    except Exception:
-        pass
-    return []
+def online_users(presence, exclude):
+    now = utc_now()
+    return sorted(u for u, ts in presence.items()
+                  if u != exclude and (dt := parse_iso(ts))
+                  and (now - dt).total_seconds() < PRESENCE_TTL)
 
-# ── Send message ──────────────────────────────────────────────────────────────
+# ── Send ──────────────────────────────────────────────────────────────────────
 
 def send_message(name, text):
     ts   = datetime.now().strftime("%H:%M")
     line = f"[{ts}] {name}: {text}"
 
-    # 1. Trigger Pusher event (instant delivery to web clients)
+    # Trigger Pusher (instant delivery to web)
     try:
         pusher_trigger("message", {"line": line})
     except Exception:
         pass
 
-    # 2. Also save to JSONBin for history (best-effort)
-    try:
-        rec  = bin_get()
-        msgs = rec.get("messages", [])
-        if line not in msgs:
-            msgs.append(line)
-            rec["messages"] = msgs[-MAX_HISTORY:]
-            bin_put(rec)
-    except Exception:
-        pass  # history save failed — message still delivered via Pusher
+    # Save to JSONBin for history
+    for attempt in range(4):
+        try:
+            rec  = bin_get()
+            msgs = rec.get("messages", [])
+            if line not in msgs:
+                msgs.append(line)
+                rec["messages"] = msgs[-MAX_HISTORY:]
+                bin_put(rec)
+            return
+        except Exception:
+            if attempt < 3:
+                time.sleep(1 * (attempt + 1))
+    console.print("[bold red]Could not save message — try again.[/bold red]")
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
@@ -148,17 +131,13 @@ def watch(name, stop_event, ready_event):
     absence    = {}
     own_prefix = f"] {name.lower()}:"
 
-    # Pre-load history silently
     for _ in range(5):
         try:
             rec = bin_get()
             for m in rec.get("messages", []):
                 seen.add(m)
-            for u, ts in rec.get("presence", {}).items():
-                if u != name:
-                    dt = parse_iso(ts)
-                    if dt and (utc_now() - dt).total_seconds() < PRESENCE_TTL:
-                        confirmed.add(u)
+            for u in online_users(rec.get("presence", {}), name):
+                confirmed.add(u)
             break
         except Exception:
             time.sleep(2)
@@ -169,16 +148,8 @@ def watch(name, stop_event, ready_event):
         try:
             rec    = bin_get()
             msgs   = rec.get("messages", [])
-            now_on = set()
+            now_on = set(online_users(rec.get("presence", {}), name))
 
-            for u, ts in rec.get("presence", {}).items():
-                if u == name:
-                    continue
-                dt = parse_iso(ts)
-                if dt and (utc_now() - dt).total_seconds() < PRESENCE_TTL:
-                    now_on.add(u)
-
-            # New messages
             for m in msgs:
                 if m not in seen:
                     seen.add(m)
@@ -186,13 +157,11 @@ def watch(name, stop_event, ready_event):
                         console.print("")
                         console.print(fmt(m))
 
-            # Joins
             for u in now_on - confirmed:
                 absence.pop(u, None)
                 confirmed.add(u)
                 console.print(f"\n[dim]  --> {u} joined[/dim]")
 
-            # Leaves
             for u in list(confirmed - now_on):
                 absence[u] = absence.get(u, 0) + 1
                 if absence[u] >= 3:
@@ -231,11 +200,15 @@ def do_command(cmd, name):
             console.print("[bold red]Could not fetch.[/bold red]")
 
     elif cmd == "/online":
-        users = get_presence()
-        if users:
-            console.print("  " + "  ".join(f"[bold green]● {u}[/bold green]" for u in users))
-        else:
-            console.print("[dim]  No one else online.[/dim]")
+        try:
+            rec   = bin_get()
+            users = online_users(rec.get("presence", {}), name)
+            if users:
+                console.print("  " + "  ".join(f"[bold green]● {u}[/bold green]" for u in users))
+            else:
+                console.print("[dim]  No one else online.[/dim]")
+        except Exception:
+            console.print("[bold red]Could not fetch.[/bold red]")
 
     elif cmd == "/quit":
         return False
@@ -260,9 +233,10 @@ def main():
         expand=False,
     ))
 
+    # Password — 3 attempts, checked against hash
     for attempt in range(3):
         pwd = getpass.getpass("Password: ")
-        if pwd == PASSWORD:
+        if check_password(pwd):
             console.print("[bold green]✓ Access granted[/bold green]\n")
             break
         left = 2 - attempt
@@ -287,11 +261,10 @@ def main():
 
     try:
         rec   = bin_get()
-        users = [u for u, ts in rec.get("presence", {}).items()
-                 if u != name and (dt := parse_iso(ts)) and (utc_now()-dt).total_seconds() < PRESENCE_TTL]
+        users = online_users(rec.get("presence", {}), name)
         console.print(f"[dim]Joined as [bold]{name}[/bold].[/dim]")
         if users:
-            console.print("  " + "  ".join(f"[bold green]● {u}[/bold green]" for u in sorted(users)))
+            console.print("  " + "  ".join(f"[bold green]● {u}[/bold green]" for u in users))
         else:
             console.print("[dim]  No one else is online.[/dim]")
         console.print("")
