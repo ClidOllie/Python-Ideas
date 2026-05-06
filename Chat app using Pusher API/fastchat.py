@@ -5,7 +5,6 @@ from rich.panel import Panel
 from rich.text import Text
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Password is stored as a SHA-256 hash — the real password is never in the code
 PASSWORD_HASH   = "22be099338be394c7100e87181c44d8be5dd72f4e24d9356f418aed88f17131c"
 APP_ID          = "2150965"
 KEY             = "404d8f54ccb40251ca17"
@@ -22,13 +21,10 @@ MAX_HISTORY     = 200
 
 console = Console()
 
-# ── Password check ────────────────────────────────────────────────────────────
-
 def check_password(attempt):
-    hashed = hashlib.sha256(attempt.encode()).hexdigest()
-    return hashed == PASSWORD_HASH
+    return hashlib.sha256(attempt.encode()).hexdigest() == PASSWORD_HASH
 
-# ── Pusher HTTP trigger ───────────────────────────────────────────────────────
+# ── Pusher trigger ────────────────────────────────────────────────────────────
 
 def pusher_trigger(event, data):
     body    = json.dumps({"name": event, "channel": CHANNEL, "data": json.dumps(data)}, separators=(',', ':'))
@@ -79,7 +75,8 @@ def fmt(raw):
 def online_users(presence, exclude):
     now = utc_now()
     return sorted(u for u, ts in presence.items()
-                  if u != exclude and (dt := parse_iso(ts))
+                  if u != exclude
+                  and (dt := parse_iso(ts))
                   and (now - dt).total_seconds() < PRESENCE_TTL)
 
 # ── Send ──────────────────────────────────────────────────────────────────────
@@ -87,14 +84,10 @@ def online_users(presence, exclude):
 def send_message(name, text):
     ts   = datetime.now().strftime("%H:%M")
     line = f"[{ts}] {name}: {text}"
-
-    # Trigger Pusher (instant delivery to web)
     try:
         pusher_trigger("message", {"line": line})
     except Exception:
         pass
-
-    # Save to JSONBin for history
     for attempt in range(4):
         try:
             rec  = bin_get()
@@ -107,7 +100,7 @@ def send_message(name, text):
         except Exception:
             if attempt < 3:
                 time.sleep(1 * (attempt + 1))
-    console.print("[bold red]Could not save message — try again.[/bold red]")
+    console.print("[bold red]Could not save — try again.[/bold red]")
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────────
 
@@ -201,8 +194,7 @@ def do_command(cmd, name):
 
     elif cmd == "/online":
         try:
-            rec   = bin_get()
-            users = online_users(rec.get("presence", {}), name)
+            users = online_users(bin_get().get("presence", {}), name)
             if users:
                 console.print("  " + "  ".join(f"[bold green]● {u}[/bold green]" for u in users))
             else:
@@ -233,7 +225,6 @@ def main():
         expand=False,
     ))
 
-    # Password — 3 attempts, checked against hash
     for attempt in range(3):
         pwd = getpass.getpass("Password: ")
         if check_password(pwd):
