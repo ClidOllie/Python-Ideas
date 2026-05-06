@@ -5,7 +5,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 # ── Pusher Config ─────────────────────────────────────────────────────────────
-PASSWORD  = 'chat123'
+PASSWORD  = '123'
 APP_ID    = "2150965"
 KEY       = "404d8f54ccb40251ca17"
 SECRET    = "3957573b1ec6a0b53f80"
