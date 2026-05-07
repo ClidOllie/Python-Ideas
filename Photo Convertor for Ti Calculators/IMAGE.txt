@@ -1,0 +1,23 @@
+ClrDraw
+{}→L₁
+1→X
+0→Y
+Pxl-On(0,0)
+If L₁(1)=1
+Pxl-Off(0,0)
+For(A,2,749)
+L₁(A)→B
+For(C,1,8)
+fPart(B/10^(9-C))→D
+int(10*D)→D
+If D=0
+Pxl-On(Y,X)
+X+1→X
+If X=95
+Then
+0→X
+Y+1→Y
+End
+End
+End
+ClrList L₁
