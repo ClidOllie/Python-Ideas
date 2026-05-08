@@ -1,6 +1,6 @@
 # Python-Ideas
 # A compilation of our random Python scripts and ideas.
-
+(Please note that most of our code only functions properly in Sublime Text.)
 # ----------------------------------------------------------------------
 
 # Chat app using pusher (Python):
