@@ -248,7 +248,9 @@ def main():
     threading.Thread(target=heartbeat, args=(name, stop_event), daemon=True).start()
     threading.Thread(target=watch, args=(name, stop_event, ready_event), daemon=True).start()
 
-    ready_event.wait(timeout=10)
+    # Star spinner while pre-loading history — stops the moment it's ready
+    with console.status("[bold orange1]✦ Connecting...[/bold orange1]", spinner="star2"):
+        ready_event.wait(timeout=10)
 
     try:
         rec   = bin_get()
